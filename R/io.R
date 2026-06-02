@@ -74,8 +74,8 @@ detect_mocaseq_cnv_caller <- function(results_path) {
     "CNVKit"
   } else if ("HMMCopy" %in% result_tools) {
     "HMMCopy"
-  } else if ("CopyWriter" %in% result_tools) {
-    "CopyWriter"
+  } else if ("Copywriter" %in% result_tools) {
+    "Copywriter"
   } else {
     stop(paste0(
       "Cannot detect CNV caller from MoCaSeq output! ",
@@ -96,28 +96,85 @@ detect_mocaseq_cnv_caller <- function(results_path) {
 #' @param data_path Character, path to results (default: current working dir).
 #' @param cnv_caller Character, name of CNV caller ("CNVKit", "HMMCopy" or
 #'  "Copywriter")
+#' @param result_type Character, type of CNV result ("segments", "log2RR")
 #' @param seg_size Integer, segment size of HMMCopy output, only used in case
 #'  of \code{cnv_caller = "HMMCopy"}.
 get_mocaseq_cnv_file <- function(
   sample_name,
   sample_type,
   cnv_caller,
+  result_type = "segments",
   seg_size = 20000
 ) {
-  switch(
-    cnv_caller,
-    CNVKit = file.path(sample_type, paste0(sample_name, ".cns")),
-    HMMCopy = paste0(
-      c(sample_name, "HMMCopy", seg_size, "segments", "txt"),
-      collapse = "."
-    ),
-    CopyWriter = paste0(
-      c(sample_name, "Copywriter", "segments", "Mode", "txt"),
-      collapse = "."
-    ),
-    stop("Unknown CNV caller: '", cnv_caller, "'")
-  )
+  stopifnot(sample_type %in% c("matched", "Tumor", "Normal"))
+  if (result_type == "segments") {
+    switch(
+      cnv_caller,
+      CNVKit = file.path(sample_type, paste0(sample_name, ".cns")),
+      HMMCopy = paste0(
+        c(sample_name, "HMMCopy", seg_size, "segments", "txt"),
+        collapse = "."
+      ),
+      Copywriter = paste0(
+        c(sample_name, "Copywriter", "segments", "Mode", "txt"),
+        collapse = "."
+      ),
+      stop("Unknown CNV caller: '", cnv_caller, "'")
+    )
+  } else if (result_type == "ratios") {
+    switch(
+      cnv_caller,
+      CNVKit = file.path(sample_type, paste0(sample_name, ".cnr")),
+      HMMCopy = paste0(
+        c(sample_name, "HMMCopy", seg_size, "log2RR", "txt"),
+        collapse = "."
+      ),
+      Copywriter = paste0(
+        c(sample_name, "Copywriter", "log2RR", "Mode", "txt"),
+        collapse = "."
+      ),
+      stop("Unknown CNV caller: '", cnv_caller, "'")
+    )
+  } else {
+    stop("Unknown CNV result: '", result_type, "'")
+  }
 }
+
+# Niklas apporach to loading CNV data from MoCaSeq ouput
+# # TODO: make function to load data from MoCaSeq output
+# load_cna_from_mocaseq_output <- function() {
+#   cna_seg_suffix <- c(
+#     ".Copywriter.segments.Mode.txt",
+#     ".HMMCopy.20000.segments.txt",
+#     ".cns"
+#   )
+#   names(cna_seg_suffix) <- c("Copywriter", "HMMCopy", "CNVKit")
+
+#   cna_ratio_suffix <- c(
+#     ".Copywriter.log2RR.Mode.txt",
+#     ".HMMCopy.20000.log2RR.txt",
+#     ".cnr"
+#   )
+#   names(cna_ratio_suffix) <- c("Copywriter", "HMMCopy", "CNVKit")
+
+#   seg_file <- file.path(
+#     indir,
+#     name,
+#     "results",
+#     cnaMethod,
+#     paste0(name, cna_seg_suffix[cnaMethod])
+#   )
+
+#   ratio_file <- file.path(
+#     indir,
+#     name,
+#     "results",
+#     cnaMethod,
+#     paste0(name, cna_ratio_suffix[cnaMethod])
+#   )
+
+#   list(fread(), fread())
+# }
 
 #' Build path to LOH variants from MoCaSeq
 #'
@@ -130,8 +187,9 @@ get_mocaseq_cnv_file <- function(
 get_mocaseq_loh_file <- function(sample_name, variant_type = "germline") {
   switch(
     variant_type,
-    germline = paste0(sample_name, ".VariantsForLOHGermline.txt"),
-    somatic = paste0(sample_name, ".VariantsForLOH.txt")
+    mixed = ,
+    somatic = paste0(sample_name, ".VariantsForLOH.txt"),
+    germline = paste0(sample_name, ".VariantsForLOHGermline.txt")
   )
 }
 
@@ -148,9 +206,11 @@ get_mocaseq_path <- function(
   sample_name,
   sample_type,
   tool_name,
-  base_path = "."
+  base_path = ".",
+  variant_type = "mixed"
 ) {
   stopifnot(sample_type %in% SAMPLE_TYPES)
+  stopifnot(variant_type %in% c("mixed", "germline", "somatic"))
   # paste0("Unknown sample type: '", sample_type, "'! Expected:", SAMPLE_TYPES)
   stopifnot(tool_name %in% MOCASEQ_TOOLS)
   results_path <- file.path(base_path, sample_name, "results")
@@ -165,7 +225,7 @@ get_mocaseq_path <- function(
       sample_type,
       mutation_caller = tool_name
     ),
-    LOH = get_mocaseq_loh_file(sample_name),
+    LOH = get_mocaseq_loh_file(sample_name, variant_type),
     CNVKit = ,
     HMMCopy = ,
     Copywriter = get_mocaseq_cnv_file(
@@ -182,4 +242,24 @@ get_mocaseq_path <- function(
     warning(paste0(file_path, "does not exist"))
     return(NULL)
   }
+}
+
+#' Parse available CNV caller results form MoCaSeq folder
+get_mocaseq_cna_callers <- function(
+  sample_id,
+  result_dir_path = "."
+) {
+  sample_path <- file.path(result_dir_path, sample_id)
+  if (!dir.exists(sample_path)) {
+    stop(paste0("Cannot find MoCaSeq results at", sample_path))
+  }
+
+  check_cna_caller_exists <- function(cnv_caller) {
+    #  & file.exists(get_mocaseq_cnv_file(cnv_caller))
+    if (dir.exists(file.path(sample_path, "results", cnv_caller))) {
+      cnv_caller
+    }
+  }
+
+  unlist(lapply(X = COPY_NUMBER_CALLERS, FUN = check_cna_caller_exists))
 }
