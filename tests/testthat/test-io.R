@@ -29,8 +29,14 @@ test_that("get_mocaseq_cnv_file resolves paths correctly", {
   # copy number ratio files
   result_type <- "ratios"
   expect_equal(
-    get_mocaseq_cnv_file(sample_id, "matched", "HMMCopy", result_type),
-    paste0(sample_id, ".HMMCopy.20000.log2RR.txt")
+    get_mocaseq_cnv_file(
+      sample_id,
+      "matched",
+      "HMMCopy",
+      result_type,
+      seg_size = 1000
+    ),
+    paste0(sample_id, ".HMMCopy.1000.log2RR.txt")
   )
 
   expect_equal(
