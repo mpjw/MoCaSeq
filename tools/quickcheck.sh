@@ -6,22 +6,23 @@ VERBOSITY=0
 SEQUENCING_TYPE="WGS"
 EXPERIMENT_TYPE="tumor_only"
 IN_DIR="$PWD"
+WORKING_DIR="$PWD"
+SAMPLE_GLOB=
 SAMPLES=()
 
 usage() {
-	echo "
-Usage: $(basename "$0") [options] [sample1/ sample2/ ...]
+	echo "Usage: $(basename "$0") [options] [sample1/ sample2/ ...]
 Options:
-  -v, --verbosity			Verbose output level 0 (default) to 3
-  -s, --sequencing_type 	Type of sequencing data. One of "WGS", "lcWGS", or "WES"
-  -e, --experiment_type 	Type of cancer experiment. One of "tumor_only" or "matched"
-  -i, --input_dir		 	Path to input directory.
-  -h, --help				Show this help message
+  -v, --verbosity           Verbose output level 0 (default) to 3
+  -s, --sequencing_type     Type of sequencing data. One of 'WGS' (default), 'lcWGS', or 'WES'
+  -e, --experiment_type     Type of cancer experiment. One of 'tumor_only' (default) or 'matched'
+  -i, --input_dir           Path to input directory, assuming '\$PWD' per default.
+  -g, --glob_pattern        Extended globbing pattern to match sample ids. E.g. '@(sample|patient)_01*'. None per default.
+  -h, --help                Show this help message
 
 Performs a fast check on results from MoCaSeq pipeline. The results are assumed
 to be located in the current working directory. To check specific samples just
-list the folder names after the options. This will check '$PWD/sampleX'.
-"
+list the folder names after the options. This will check \$PWD/sampleX."
 }
 
 # argument parsing
@@ -43,8 +44,13 @@ while [[ $# -gt 0 ]]; do
             IN_DIR="$2"
             shift 2
 			;;
+		-g|--glob_pattern)
+            SAMPLE_GLOB="$2"
+            shift 2
+			;;
         -h|--help)
             usage
+			exit 0
             ;;
         -*)
             echo "Error: Unknown option $1" >&2
@@ -61,6 +67,19 @@ done
 if [[ ! -r "$IN_DIR" ]]; then
 	echo "Cannot read files from $IN_DIR! Please provide valid input_dir"
 	exit 1
+fi
+
+# expand glob if provided
+if [[ -n "$SAMPLE_GLOB" ]]; then
+	cd $IN_DIR
+	shopt -s extglob
+	glob_list=( $SAMPLE_GLOB )
+	shopt -u extglob
+	# TODO: implement solution without cd
+	# mapfile -d '\n' glob_list< <(compgen -G "$IN_DIR/$SAMPLE_GLOB")
+	# glob_list=$(basename -a $glob_list)
+	SAMPLES=("${SAMPLES[@]}" "${glob_list[@]}")
+	cd "$WORKING_DIR"
 fi
 
 # check sample dirs exists and are readable
@@ -83,10 +102,13 @@ if [[ ${#VALID_SAMPLES[@]} -eq 0 ]]; then
     exit 0
 fi
 
+if [[ $VERBOSITY -gt 0 ]]; then
+	echo "Processing samples: ${SAMPLES[*]}"
+fi
+
 if [[ $VERBOSITY -gt 2 ]]; then
 	echo "Assuming sequencing type: $SEQUENCING_TYPE"
 	echo "Assuming experiment type: $EXPERIMENT_TYPE"
-	echo "Processing samples: ${SAMPLES[*]}"
 fi
 
 check_result_files() {
@@ -115,7 +137,7 @@ cd "$IN_DIR"
 for sample in "${VALID_SAMPLES[@]}"; do
 	sample_path="$sample/results"
 	file_details="Results found in $IN_DIR/$sample/:"
-	file_globs_tried="File globs tried in $IN_DIR/$sample/:"
+	file_globs_tried="File globs unmatched in $IN_DIR/$sample/:"
 	sample_status="OK"
 	missing_files=
 	QC_log_tail=
