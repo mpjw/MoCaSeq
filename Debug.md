@@ -4,12 +4,12 @@
 Use this command for quick-and-dirty interactive debugging check in docker
 ```sh
 ref_directory=/fast/SSD2/MoCaSeq_ref/GRCh38.p12/
+script_directory=$HOME/Projects/Main/Metastasis/lib/MoCaSeq/
 docker run -it --rm \
 --user $(id -u):$(id -g) \
 -v $PWD:/var/pipeline/ \
 -v ${ref_directory}:/var/pipeline/ref/ \
 -v ${script_directory}:/opt/MoCaSeq/ \
--v ${bam_directory}:/var/pipeline/raw/ \
 --entrypoint=/bin/bash \
 mocaseq2
 
