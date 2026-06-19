@@ -58,11 +58,13 @@ if(species == "Mouse"){
   segment[Chrom == 21, Chrom := "Y"]
   genesDT[chr == 20, Chrom := "X"]
   genesDT[chr == 21, Chrom := "Y"]
+  chromorder <- c(1:19, "X", "Y")
 } else if(species == "Human"){
   segment[Chrom == 23, Chrom := "X"]
   segment[Chrom == 24, Chrom := "Y"]
   genesDT[chr == 23, Chrom := "X"]
   genesDT[chr == 24, Chrom := "Y"]
+  chromorder <- c(1:22, "X", "Y")
 }
 segment <- data.frame(segment)
 
@@ -122,6 +124,11 @@ cnv = cnv %>%
   arrange(desc(abs(as.numeric(Mean))),.by_group=T) %>% 
   filter(row_number()==1) %>% 
   arrange(as.numeric(Start),as.numeric(End))
+
+# sort by chromosome
+cnv$Chrom <- factor(cnv$Chrom, levels = chromorder)
+cnv$Start <- as.numeric(cnv$Start)
+setorder(cnv, Chrom, Start)
 
 if (method=="Copywriter"){
   write.table(cnv,paste(name,"/results/",method,"/",name,".",method,".genes.Mode.txt",sep=""),col.names=T,row.names=F,quote=F,sep="\t")
