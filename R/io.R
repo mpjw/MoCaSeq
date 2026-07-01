@@ -47,13 +47,12 @@ get_mocaseq_snv_file <- function(
         )
         mutect2_file_suffix <- switch(
           postprocessing,
-          NULL = ".txt",
           Positions = ,
-          NoCommonSNPs = paste0(postprocessing, ".txt"),
-          OnlyImpact = ".NoCommonSNPs.OnlyImpact.txt",
-          TruSight = ".NoCommonSNPs.OnlyImpact.TruSight.txt",
-          CGC = ".NoCommonSNPs.OnlyImpact.CGC.txt",
-          stop("Unknown filtering on Mutect2 file: ", postprocessing)
+          NoCommonSNPs = paste0(c(postprocessing, "txt"), collapse = "."),
+          OnlyImpact = "NoCommonSNPs.OnlyImpact.txt",
+          TruSight = "NoCommonSNPs.OnlyImpact.TruSight.txt",
+          CGC = "NoCommonSNPs.OnlyImpact.CGC.txt",
+          "txt"
         )
         paste0(mutect2_file_prefix, ".", mutect2_file_suffix)
       },
@@ -71,13 +70,12 @@ get_mocaseq_snv_file <- function(
         )
         mutect2_file_suffix <- switch(
           postprocessing,
-          NULL = ".txt",
           Positions = ,
-          NoCommonSNPs = paste0(postprocessing, ".txt"),
-          OnlyImpact = ".NoCommonSNPs.OnlyImpact.txt",
-          TruSight = ".NoCommonSNPs.OnlyImpact.TruSight.txt",
-          CGC = ".NoCommonSNPs.OnlyImpact.CGC.txt",
-          stop("Unknown filtering on Mutect2 file: ", postprocessing)
+          NoCommonSNPs = paste0(c(postprocessing, "txt"), collapse = "."),
+          OnlyImpact = "NoCommonSNPs.OnlyImpact.txt",
+          TruSight = "NoCommonSNPs.OnlyImpact.TruSight.txt",
+          CGC = "NoCommonSNPs.OnlyImpact.CGC.txt",
+          "txt"
         )
         paste0(mutect2_file_prefix, ".", mutect2_file_suffix)
       },
@@ -97,7 +95,8 @@ get_mocaseq_snv_file <- function(
 #' @return Character 'bash', or 'nextflow' indicating MoCaSeq pipeline version
 detect_mocaseq_version <- function(results_path) {
   bash_qc_exists <- dir.exists(file.path(results_path, "QC"))
-  if (bash_qc_exists) {
+  matched_files <- Sys.glob(file.path(results_path, "*", "*.matched.*"))
+  if (bash_qc_exists || length(matched_files) == 0) {
     "bash"
   } else {
     "nextflow"
@@ -115,6 +114,7 @@ detect_mocaseq_version <- function(results_path) {
 #' @return Character name of CNV caller one of "CNVKit", "HMMCopy" or
 #'  "CopyWriter".
 detect_mocaseq_cnv_caller <- function(results_path) {
+  stopifnot(dir.exists(results_path))
   result_tools <- basename(list.dirs(results_path, recursive = FALSE))
   if ("CNVKit" %in% result_tools) {
     "CNVKit"
@@ -194,12 +194,32 @@ get_mocaseq_cnv_file <- function(
 #'
 #' @param sample_name Character sample name from MoCaSeq run
 #' @param variant_type Character variant type one of "germline" or "somatic"
-get_mocaseq_loh_file <- function(sample_name, variant_type = "germline") {
+get_mocaseq_loh_file <- function(
+  sample_name,
+  result_type = "variants_for_LOH",
+  variant_type = "somatic"
+) {
   switch(
-    variant_type,
-    mixed = ,
-    somatic = paste0(sample_name, ".VariantsForLOH.txt"),
-    germline = paste0(sample_name, ".VariantsForLOHGermline.txt")
+    result_type,
+    segments = paste0(c(sample_name, "LOH", "Segments", "tsv"), collapse = "."),
+    segments_flex = paste0(
+      c(sample_name, "LOH", "Segments", "flex", "tsv"),
+      collapse = "."
+    ),
+    variants = paste0(c(sample_name, "LOH", "Variants", "tsv"), collapse = "."),
+    variants = paste0(
+      c(sample_name, "LOH", "Variants", "flex", "tsv"),
+      collapse = "."
+    ),
+    variants_for_LOH = {
+      switch(
+        variant_type,
+        mixed = ,
+        somatic = paste0(sample_name, ".VariantsForLOH.txt"),
+        germline = paste0(sample_name, ".VariantsForLOHGermline.txt")
+      )
+    },
+    stop("Unknown type of LOH result:, '", result_type, "'!")
   )
 }
 
@@ -213,7 +233,7 @@ get_mocaseq_loh_file <- function(sample_name, variant_type = "germline") {
 #'
 #' TODO: expand/recycle parameters other than sample_name if multiple sample
 #' names are provided
-#' TODO: use ...
+#' @returns Character path to described file, or NULL
 #' @export
 get_mocaseq_path <- function(
   sample_name,
@@ -221,6 +241,7 @@ get_mocaseq_path <- function(
   tool_name,
   base_path = ".",
   variant_type = "mixed",
+  verbose = FALSE,
   ...
 ) {
   stopifnot(sample_type %in% SAMPLE_TYPES)
@@ -229,11 +250,14 @@ get_mocaseq_path <- function(
   stopifnot(tool_name %in% MOCASEQ_TOOLS)
   results_path <- file.path(base_path, sample_name, "results")
 
-  stopifnot(dir.exists(results_path))
-  # paste0("MoCaSeq results not found at: ", results_path)
+  if (!dir.exists(results_path)) {
+    warning("MoCaSeq results not found at: ", results_path)
+    return(NULL)
+  }
 
   if (!exists("pipeline_version") || pipeline_version == NULL) {
     pipeline_version <- detect_mocaseq_version(results_path)
+    if (verbose) print(paste("detected pipeline version", pipeline_version))
   }
 
   file_name <- switch(
@@ -245,7 +269,7 @@ get_mocaseq_path <- function(
       pipeline_version = pipeline_version,
       ...
     ),
-    LOH = get_mocaseq_loh_file(sample_name, variant_type, ...),
+    LOH = get_mocaseq_loh_file(sample_name, ...),
     CNVKit = ,
     HMMCopy = ,
     Copywriter = get_mocaseq_cnv_file(
@@ -256,12 +280,14 @@ get_mocaseq_path <- function(
     )
   )
 
+  if (verbose) {
+    print(paste("file name built:", file_name))
+  }
   file_path <- file.path(results_path, tool_name, file_name)
   if (file.exists(file_path)) {
-    return(file_path)
+    file_path
   } else {
-    warning(paste0(file_path, " does not exist"))
-    return(NULL)
+    warning(paste(file_path, "does not exist"))
   }
 }
 
