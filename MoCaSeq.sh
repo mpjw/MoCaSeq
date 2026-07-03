@@ -38,6 +38,23 @@ usage()
   exit 1
 }
 
+check_intermediate_file() {
+	local file=$1
+	local step=$2
+	if [ ! -s "$file" ]; then
+		echo -e "ERROR: Sanity check failed. Intermediate file '$file' is missing or empty after '$step'.\nAborting pipeline to prevent cascading errors." | tee -a "$name/results/QC/$name.report.txt"
+		exit 1
+	fi
+}
+
+check_pid_success() {
+	local pids=$1
+	local step=$2
+	for pid in $pids; do
+		wait "$pid" || { echo "ERROR: Sanity check failed. A background process ($pid) failed during '$step'. Aborting pipeline." | tee -a "$name/results/QC/$name.report.txt"; exit 1; }
+	done
+}
+
 # default parameters
 fastq_normal_1=
 fastq_normal_2=
@@ -94,13 +111,13 @@ while [ "$1" != "" ]; do case $1 in
 	*) usage;shift;;
 esac; shift; done
 
-if [ -z $config_file ]; then
+if [ -z "$config_file" ]; then
 	config_file=/opt/MoCaSeq/config.sh
 fi
 
 test_dir=${config_file%/*}/test
 
-if [ $test = 'yes' ]; then
+if [ "$test" = 'yes' ]; then
 		name=MoCaSeq_Test
 		fastq_normal_1=$test_dir/Mouse.Normal.R1.fastq.gz
 		fastq_normal_2=$test_dir/Mouse.Normal.R2.fastq.gz
@@ -162,8 +179,42 @@ else Titan=no
 fi
 
 #reading configuration from $config_file
-source $config_file
+source "$config_file"
 repository_dir=${config_file%/*}/repository
+
+
+# check reading input files
+if [[ -z "$bam_normal" && -z "$bam_tumor" ]]; then
+	if [[ ! -r "$fastq_normal_1" && ! -r "$fastq_normal_2" && ! -r "$fastq_tumor_1"  && ! -r "$fastq_tumor_2" ]]; then
+		echo "ERROR: Cannot read input fastq files, please check permissions!" | tee -a "$name/results/QC/$name.report.txt"
+		echo "  fastqs normal: $fastq_normal_1, $fastq_normal_2" | tee -a "$name/results/QC/$name.report.txt"
+		echo "  fastqs tumor: $fastq_tumor_1, $fastq_tumor_2" | tee -a "$name/results/QC/$name.report.txt"
+	fi
+else
+	if [[ ! -r "$bam_normal" && ! -r "$bam_tumor" ]]; then
+		echo "ERROR: Cannot read input bam files, please check permissions!" | tee -a "$name/results/QC/$name.report.txt"
+		echo "  bam normal: $bam_normal" | tee -a "$name/results/QC/$name.report.txt"
+		echo "  bam tumor: $bam_tumor" | tee -a "$name/results/QC/$name.report.txt"
+	fi
+fi
+
+# check reading reference files
+if [[ ! -r "$genome_dir" ]]; then
+	echo "ERROR: Cannot read reference genome directory, please check permissions!" | tee -a "$name/results/QC/$name.report.txt"
+	echo "  genome dir: $genome_dir" | tee -a "$name/results/QC/$name.report.txt"
+fi
+
+# checking temp folder writing
+if [[ ! -w "$temp_dir/foo" ]]; then
+	echo "ERROR: Cannot write into temp directory, please check permissions!" | tee -a "$name/results/QC/$name.report.txt"
+	echo "  temp directory: $temp_dir" | tee -a "$name/results/QC/$name.report.txt"
+fi
+
+# TODO: check results folder is writable
+if [[ ! -w "./" ]]; then
+	echo "ERROR: Cannot write into results directory, please check permissions!" | tee -a "$name/results/QC/$name.report.txt"
+	echo "  results directory: $PWD" | tee -a "$name/results/QC/$name.report.txt"
+fi
 
 echo '---- Starting Mouse Cancer Genome Analysis ----'
 echo -e "$(date) \t timestamp: $(date +%s)"
@@ -193,7 +244,7 @@ fi
 echo '---- Checking for available reference files ----' | tee -a $name/results/QC/$name.report.txt
 echo -e "$(date) \t timestamp: $(date +%s)" | tee -a $name/results/QC/$name.report.txt
 
-if [ -z $genome_dir/GetReferenceData.txt ]; then
+if [ ! -f "$genome_dir/GetReferenceData.txt" ]; then
 	echo '---- Reference files not found - Files will be downloaded ----' | tee -a $name/results/QC/$name.report.txt
 	echo -e "$(date) \t timestamp: $(date +%s)" | tee -a $name/results/QC/$name.report.txt
     rm -rf $genome_dir
@@ -392,7 +443,7 @@ if [ $repeat_mapping = "yes" ]; then
 		md5sum $name/fastq/$name.$type.R2.fastq.gz > $name/fastq/$name.$type.R2.fastq.gz.md5 & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 
 	echo '---- Running FastQC before trimming ----' | tee -a $name/results/QC/$name.report.txt
@@ -406,7 +457,7 @@ if [ $repeat_mapping = "yes" ]; then
 		--outdir=$name/results/QC & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 
 	echo '---- Trimming reads ----' | tee -a $name/results/QC/$name.report.txt
@@ -428,7 +479,7 @@ if [ $repeat_mapping = "yes" ]; then
 		ILLUMINACLIP:$trimmomatic_dir/adapters/TruSeq3-PE-2.fa:2:30:10 & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 
 	echo '---- Running FastQC after trimming ----' | tee -a $name/results/QC/$name.report.txt
@@ -442,7 +493,7 @@ if [ $repeat_mapping = "yes" ]; then
 		--outdir=$name/results/QC & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 
 	echo '---- Removing fastq files ----' | tee -a $name/results/QC/$name.report.txt
@@ -453,7 +504,7 @@ if [ $repeat_mapping = "yes" ]; then
 		rm $name/fastq/$name.$type.R2.fastq.gz & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 
 	echo '---- Mapping trimmed reads ----' | tee -a $name/results/QC/$name.report.txt
@@ -470,6 +521,8 @@ if [ $repeat_mapping = "yes" ]; then
 		-I /dev/stdin \
 		-O $temp_dir/$name.$type.cleaned.bam \
 		-VALIDATION_STRINGENCY LENIENT
+		
+		check_intermediate_file "$temp_dir/$name.$type.cleaned.bam" "Mapping trimmed reads"
 	done
 
 	for type in $types;
@@ -480,7 +533,7 @@ if [ $repeat_mapping = "yes" ]; then
 		rm $temp_dir/$name.$type.R2.not_passed.fastq.gz & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 
 	echo '---- Postprocessing I (Sorting, fixing read groups and marking duplicates) ----' | tee -a $name/results/QC/$name.report.txt
@@ -514,7 +567,7 @@ if [ $repeat_mapping = "yes" ]; then
 		rm $temp_dir/$name.$type.cleaned.sorted.readgroups.bam & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 
 	echo '---- Postprocessing II (Base recalibration) ----' | tee -a $name/results/QC/$name.report.txt
@@ -553,8 +606,13 @@ if [ $repeat_mapping = "yes" ]; then
 		rm $name/results/bam/$name.$type.bai & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
+
+	for type in $types;
+	do
+		check_intermediate_file "$name/results/bam/$name.$type.bam" "Base recalibration"
+	done
 
 fi
 
@@ -580,7 +638,7 @@ if [ $quality_control = "yes" ]; then
 		> $name/results/QC/$name.$type.bam.idxstats & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 
 	echo '---- Quality control II (WES- or WGS-specific metrics) ----' | tee -a $name/results/QC/$name.report.txt
@@ -599,7 +657,7 @@ if [ $quality_control = "yes" ]; then
 			-TARGET_INTERVALS $interval_file & PIDS="$PIDS $!"
 		done
 
-		wait $PIDS
+		check_pid_success "$PIDS" "Background tasks"
 		PIDS=""
 
 	elif [ $sequencing_type = 'WGS' ]; then
@@ -613,7 +671,7 @@ if [ $quality_control = "yes" ]; then
 			-SAMPLE_SIZE 1000000 & PIDS="$PIDS $!"
 		done
 
-		wait $PIDS
+		check_pid_success "$PIDS" "Background tasks"
 		PIDS=""
 	fi
 
@@ -744,6 +802,8 @@ fi
 
 python2 $name/results/Manta/runWorkflow.py -m local -j $threads
 
+check_intermediate_file "$name/results/Manta/results/variants/candidateSmallIndels.vcf.gz" "Manta workflow"
+
 sh $repository_dir/SV_MantaPostprocessing.sh $name $species $config_file $runmode $types
 
 if [ $runmode = "MS" ]; then
@@ -774,6 +834,8 @@ fi
 if [ $runmode = "MS" ]; then
 	python2 $name/results/Strelka/Strelka/runWorkflow.py -m local -j $threads
 
+	check_intermediate_file "$name/results/Strelka/Strelka/results/variants/somatic.snvs.vcf.gz" "Strelka workflow"
+
 	sh $repository_dir/SNV_StrelkaPostprocessing.sh \
 	$name $species $config_file $filtering $artefact_type $GATK
 
@@ -793,7 +855,7 @@ if [ $sequencing_type = 'WES' ]; then
 		python2 $name/results/Strelka/Strelka-$type/runWorkflow.py -m local -j $threads & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 elif [ $sequencing_type = 'WGS' ]; then
 	for type in $types;
@@ -806,7 +868,7 @@ elif [ $sequencing_type = 'WGS' ]; then
 		python2 $name/results/Strelka/Strelka-$type/runWorkflow.py -m local -j $threads & PIDS="$PIDS $!"
 	done
 
-	wait $PIDS
+	check_pid_success "$PIDS" "Background tasks"
 	PIDS=""
 fi
 
@@ -823,6 +885,8 @@ if [ $Mutect2 = 'yes' ] && [ $runmode = "MS" ]; then
 	--f1r2-tar-gz $name/results/Mutect2/$name.m2.f1r2.tar.gz \
 	-O $name/results/Mutect2/$name.m2.vcf \
 	-bamout $name/results/Mutect2/$name.m2.bam
+
+	check_intermediate_file "$name/results/Mutect2/$name.m2.vcf" "Mutect2"
 
 	echo '---- Mutect2 Postprocessing (matched tumor-normal) ----' | tee -a $name/results/QC/$name.report.txt
 	echo -e "$(date) \t timestamp: $(date +%s)" | tee -a $name/results/QC/$name.report.txt
@@ -849,6 +913,8 @@ if [ $Mutect2 = 'yes' ]; then
 		--f1r2-tar-gz $name/results/Mutect2/$name."$type".m2.f1r2.tar.gz \
 		-O $name/results/Mutect2/$name."$type".m2.vcf \
 		-bamout $name/results/Mutect2/$name."$type".m2.bam
+
+		check_intermediate_file "$name/results/Mutect2/$name.$type.m2.vcf" "Mutect2 single-sample"
 
 		sh $repository_dir/SNV_Mutect2PostprocessingSS.sh \
 		$name $species $config_file $type $filtering $artefact_type $GATK
@@ -936,10 +1002,12 @@ if [ $runmode = "MS" ]; then
 	-t $name/results/bam/$name.Tumor.bam \
 	-o $name/results/msisensor/"$name".msisensor \
 	-d $microsatellite_file -b $threads
+	check_intermediate_file "$name/results/msisensor/$name.msisensor" "msisensor (MS)"
 elif [ $runmode = "SS" ]; then
 	msisensor msi -t $name/results/bam/$name.$types.bam \
 	-o $name/results/msisensor/"$name".$types.msisensor \
 	-d $microsatellite_file -b $threads
+	check_intermediate_file "$name/results/msisensor/$name.$types.msisensor" "msisensor (SS)"
 fi
 
 #exec 1>$(tty)
@@ -969,6 +1037,8 @@ if [ $sequencing_type = 'WGS' ] && [ $Delly = 'yes' ] && [ $runmode = "MS" ]; th
 
 	bcftools view $name/results/Delly/$name.pre.bcf \
 	> $name/results/Delly/$name.pre.vcf
+	
+	check_intermediate_file "$name/results/Delly/$name.pre.vcf" "Delly SV calling"
 fi
 
 if [ $sequencing_type = 'WGS' ] && [ $Delly = 'yes' ] && [ $runmode = "MS" ]; then
