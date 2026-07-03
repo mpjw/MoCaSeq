@@ -241,6 +241,7 @@ get_mocaseq_path <- function(
   tool_name,
   base_path = ".",
   variant_type = "mixed",
+  ignore_not_existing = FALSE,
   verbose = FALSE,
   ...
 ) {
@@ -250,7 +251,7 @@ get_mocaseq_path <- function(
   stopifnot(tool_name %in% MOCASEQ_TOOLS)
   results_path <- file.path(base_path, sample_name, "results")
 
-  if (!dir.exists(results_path)) {
+  if (!dir.exists(results_path) && !ignore_not_existing) {
     warning("MoCaSeq results not found at: ", results_path)
     return(NULL)
   }
@@ -284,10 +285,11 @@ get_mocaseq_path <- function(
     print(paste("file name built:", file_name))
   }
   file_path <- file.path(results_path, tool_name, file_name)
-  if (file.exists(file_path)) {
+  if (file.exists(file_path) || ignore_not_existing) {
     file_path
   } else {
     warning(paste(file_path, "does not exist"))
+    NULL
   }
 }
 
